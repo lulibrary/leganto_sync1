@@ -8,6 +8,6 @@ class LegantoSync1Test < Minitest::Test
   def test_migration
     m = LegantoSync1::Migration.new
     lists = ['http://lancaster.myreadinglists.org/lists/A56880F3-10B3-45EC-FD16-D29D0198AEE3']
-    m.write('/home/lbaajh/tmp/aspire/lists/pub2015-17.csv', lists)
+    m.write('/home/lbaajh/tmp/aspire/lists/law103x.csv', lists)
   end
 end
