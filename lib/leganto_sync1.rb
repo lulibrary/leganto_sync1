@@ -7,7 +7,6 @@ require 'aspire'
 require 'aspire/enumerator/report_enumerator'
 require 'aspire/user_lookup'
 require 'email_selector'
-require 'lusi_api'
 require 'redis_hash'
 
 require 'leganto_sync1/version'
