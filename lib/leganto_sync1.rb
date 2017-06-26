@@ -283,7 +283,7 @@ module LegantoSync1
       self.logger = Helpers.logger
       self.redis = Helpers.redis_api
       self.email_selector = Helpers.email_selector(redis: redis)
-      self.lists = Helpers.aspire_list_enumerator('2016-17', '2015-16')
+      self.lists = Helpers.aspire_list_enumerator('2016-17') # '2015-16' Do lists separately as they have different caches
       self.object_factory = Helpers.aspire_object_factory(logger: logger,
                                                           redis: redis)
     end
@@ -306,6 +306,24 @@ module LegantoSync1
     attr_accessor :filename
     attr_accessor :ldap_lookup
     attr_accessor :logger
+
+    CITATION_TYPES = {
+        "ARTICLE" => "CR",
+        "BOOK" => "BK",
+        "UNKNOWNTYPE" => "OTHER",
+        "CHAPTER" => "BK_C",
+        "DOCUMENT" => "DO",
+        "AUDIO-VISUALDOCUMENT" => "VD",
+        "WEBSITE" => "WS",
+        "WEBPAGE" => "WS",
+        "AUDIODOCUMENT" => "AR",
+        "LEGALCASEDOCUMENT" => "CASE",
+        "PROCEEDINGS" => "CONFERENCE",
+        "JOURNAL" => "JR",
+        "LEGALDOCUMENT" => "LEGAL_DOCUMENT",
+        "LEGISLATION" => "LEGISLATION",
+        "THESIS" => "TH"
+    }
 
     def initialize(courses: nil, email_selector: nil, factory: nil,
                    ldap_lookup: nil, logger: nil)
@@ -363,14 +381,18 @@ module LegantoSync1
     end
 
     def row(list = nil, item = nil, course_code = nil)
-      list_status = 'BeingPrepared'
-      list_visibility = 'RESTRICTED'
-      rl_status = 'DRAFT'
+      list_status = 'Complete'
+      list_visibility = 'REGISTERED'
+      rl_status = 'PUBLISHED'
       rl_code = if course_code[5] == 'UNKNOWN' || list.time_period.nil?
                   File.basename(list.uri)
                 else
                   "#{course_code[5]}_#{list.time_period.year}"
                 end
+      md5 = Digest::MD5.new
+      md5.update list.name
+      rl_name_digest = md5.hexdigest
+      rl_code = "#{rl_code}_#{rl_name_digest}"
       # Concatenate nested sections into a single section name
       # item.parent_sections returns sections in nearest-furthest order, but we
       # want to concatenate in furthest-nearest order, so we reverse the list
@@ -378,6 +400,9 @@ module LegantoSync1
       section_description = ''
       section_end_date = ''
       section_name = sections.reverse.join(' - ')
+      if section_name.nil? || section_name.empty?
+        section_name = 'Resource List'
+      end
       section_start_date = ''
       # Take the section description from the nearest enclosing section with a
       # description
@@ -388,7 +413,7 @@ module LegantoSync1
         end
       end
 
-      citation_status = 'BeingPrepared'
+      citation_status = 'Complete'
 
       resource = item.resource
 
@@ -479,7 +504,7 @@ module LegantoSync1
       # citation_end_page
       row[33] = ''
       # citation_note
-      row[37] = item.library_note
+      row[37] = ''
       # additional_person_name
       row[38] = '' # TODO: What's the use case for this?
       # citation_public_note
@@ -555,7 +580,8 @@ module LegantoSync1
         result.delete!(' ')
         result.upcase!
       end
-      result
+      return CITATION_TYPES[result] unless CITATION_TYPES[result].nil? || CITATION_TYPES[result].empty?
+      CITATION_TYPES["UNKNOWNTYPE"]
     end
 
     def list_owner_username(list)
