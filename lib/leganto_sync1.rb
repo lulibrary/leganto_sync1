@@ -40,9 +40,11 @@ module LegantoSync1
 
     def self.aspire_list_enumerator(*periods, list_report: nil)
       list_report ||= ENV['ASPIRE_REPORT_LISTS']
-      periods = nil if periods.empty?
+      if (periods.nil? || periods.empty?) && ENV['ASPIRE_LIST_PERIODS']
+        periods = ENV['ASPIRE_LIST_PERIODS'].split(',')
+      end
       filters = [
-        proc { |row| periods.include?(row['Time Period']) },
+        proc { |row| periods.nil? || periods.include?(row['Time Period']) },
         proc { |row| row['Status'].to_s.start_with?('Published') },
         proc { |row| row['Privacy Control'] == 'Public' }
       ]
@@ -283,7 +285,7 @@ module LegantoSync1
       self.logger = Helpers.logger
       self.redis = Helpers.redis_api
       self.email_selector = Helpers.email_selector(redis: redis)
-      self.lists = Helpers.aspire_list_enumerator('2016-17') # '2015-16' Do lists separately as they have different caches
+      self.lists = Helpers.aspire_list_enumerator
       self.object_factory = Helpers.aspire_object_factory(logger: logger,
                                                           redis: redis)
     end
@@ -302,6 +304,7 @@ module LegantoSync1
   class Writer
     attr_accessor :courses
     attr_accessor :email_selector
+    attr_accessor :encoding
     attr_accessor :factory
     attr_accessor :filename
     attr_accessor :ldap_lookup
@@ -325,13 +328,27 @@ module LegantoSync1
         "THESIS" => "TH"
     }
 
-    def initialize(courses: nil, email_selector: nil, factory: nil,
-                   ldap_lookup: nil, logger: nil)
+    # Field length limits
+    MAX_CITATION_SOURCE = 4000
+    MAX_READING_LIST_CODE = 50
+    MAX_READING_LIST_DESCRIPTION = 4000
+    MAX_READING_LIST_NAME = 250
+    MAX_SECTION_DESCRIPTION = 4000
+    MAX_SECTION_NAME = 4000
+
+    def initialize(courses: nil, email_selector: nil, encoding: nil,
+                   factory: nil, ldap_lookup: nil, logger: nil)
       self.courses = courses
       self.email_selector = email_selector
+      self.encoding = encoding || Encoding::UTF_8
       self.factory = factory
       self.ldap_lookup = ldap_lookup
       self.logger = logger
+    end
+
+    def field(value, default = '', size: nil)
+      value ||= default
+      size ? value[0...size] : value
     end
 
     def header
@@ -384,15 +401,7 @@ module LegantoSync1
       list_status = 'Complete'
       list_visibility = 'REGISTERED'
       rl_status = 'PUBLISHED'
-      rl_code = if course_code[5] == 'UNKNOWN' || list.time_period.nil?
-                  File.basename(list.uri)
-                else
-                  "#{course_code[5]}_#{list.time_period.year}"
-                end
-      md5 = Digest::MD5.new
-      md5.update list.name
-      rl_name_digest = md5.hexdigest
-      rl_code = "#{rl_code}_#{rl_name_digest}"
+      rl_code = list_code(list, course_code)
       # Concatenate nested sections into a single section name
       # item.parent_sections returns sections in nearest-furthest order, but we
       # want to concatenate in furthest-nearest order, so we reverse the list
@@ -419,105 +428,99 @@ module LegantoSync1
 
       row = []
       # course_code
-      row[0] = course_code[0]
+      row[0] = field(course_code[0])
       # Section id
-      row[1] = course_code[1]
+      row[1] = field(course_code[1])
       # Searchable id1
-      row[2] = course_code[2]
+      row[2] = field(course_code[2])
       # Searchable id2
-      row[3] = course_code[3]
+      row[3] = field(course_code[3])
       # Searchable id3
-      row[4] = course_code[4]
+      row[4] = field(course_code[4])
       # Reading_list_code
-      row[5] = rl_code
+      row[5] = field(rl_code, size: MAX_READING_LIST_CODE)
       # Reading list name
-      row[6] = list.name
+      row[6] = field(list.name, size: MAX_READING_LIST_NAME)
       # Reading List Description
-      row[7] = list.description
+      row[7] = field(list.description, size: MAX_READING_LIST_DESCRIPTION)
       # Reading lists Status
-      row[8] = list_status
+      row[8] = field(list_status)
       # RLStatus
-      row[9] = rl_status
+      row[9] = field(rl_status)
       # visibility
-      row[10] = list_visibility
+      row[10] = field(list_visibility)
       # owner_user_name
-      row[11] = list_owner_username(list)
+      row[11] = field(list_owner_username(list))
       # section_name
-      row[12] = section_name
+      row[12] = field(section_name, MAX_SECTION_NAME)
       # section_description
-      row[13] = section_description
+      row[13] = field(section_description, MAX_SECTION_DESCRIPTION)
       # section_start_date
-      row[14] = section_start_date
+      row[14] = field(section_start_date)
       # section_end_date
-      row[15] = section_end_date
+      row[15] = field(section_end_date)
       # citation_secondary_type
-      row[16] = citation_type(resource)
+      row[16] = field(citation_type(resource))
       # citation_status
-      row[17] = citation_status
+      row[17] = field(citation_status)
       # citation_tags
-      row[18] = citation_tags(item)
+      row[18] = field(citation_tags(item))
       if resource
         # citation_originating_system_id
-        row[19] = resource.citation_local_control_number
+        row[19] = field(resource.citation_local_control_number)
         # citation_title
-        row[20] = resource.citation_title || item.title
+        row[20] = field(resource.citation_title || item.title)
         # citation_journal_title
-        row[21] = resource.journal_title
+        row[21] = field(resource.journal_title)
         # citation_author
-        row[22] = citation_authors(resource)
+        row[22] = field(citation_authors(resource))
         # citation_publication_date
-        row[23] = resource.citation_date
+        row[23] = field(resource.citation_date)
         # citation_edition
-        row[24] = resource.citation_edition
+        row[24] = field(resource.citation_edition)
         # citation_isbn
-        row[25] = resource.citation_isbn10 || resource.citation_isbn13
+        row[25] = field(resource.citation_isbn10 || resource.citation_isbn13)
         # citation_issn
-        row[26] = resource.citation_issn
+        row[26] = field(resource.citation_issn)
         # citation_place_of_publication
-        row[27] = resource.citation_place_of_publication
+        row[27] = field(resource.citation_place_of_publication)
         # citation_publisher
-        row[28] = resource.citation_publisher
+        row[28] = field(resource.citation_publisher)
         # citation_volume
-        row[29] = resource.citation_volume
+        row[29] = field(resource.citation_volume)
         # citation_issue
-        row[30] = resource.citation_issue
+        row[30] = field(resource.citation_issue)
         # citation_pages
-        row[31] = resource.citation_page
+        row[31] = field(resource.citation_page)
         # citation_start_page
-        row[32] = resource.citation_page_start
+        row[32] = field(resource.citation_page_start)
         # citation_end_page
-        row[33] = resource.citation_page_end
+        row[33] = field(resource.citation_page_end)
         # citation_doi
-        row[34] = resource.citation_doi
+        row[34] = field(resource.citation_doi)
         # citation_chapter
-        row[35] = resource.chapter_title
+        row[35] = field(resource.chapter_title)
         # citation_source
-        row[36] = resource.citation_url
+        row[36] = field(resource.citation_url, size: MAX_CITATION_SOURCE)
       else
-        row[19] = item.local_control_number
-        row[20] = item.title
-        (21..36).each { |i| row[i] = '' }
+        row[19] = field(item.local_control_number)
+        row[20] = field(item.title)
+        (21..36).each { |i| row[i] = field('') }
       end
-
-      # citation_start_page
-      row[32] = ''
-      # citation_end_page
-      row[33] = ''
       # citation_note
-      row[37] = ''
+      row[37] = field('')
       # additional_person_name
-      row[38] = '' # TODO: What's the use case for this?
+      row[38] = field('') # TODO: What's the use case for this?
       # citation_public_note
-      row[39] = item.student_note
+      row[39] = field(item.student_note)
       # external_system_id
-      row[40] = '' # TODO: What's the correct value for this?
-
+      row[40] = field('') # TODO: What's the correct value for this?
       # Return the row
       row
     end
 
     def write(filename, lists)
-      CSV.open(filename, 'wb', force_quotes: true) do |file|
+      CSV.open(filename, 'wb', encoding: encoding, force_quotes: true) do |file|
         file << header
         lists.each do |list|
           list = list[1] unless list.is_a?(String)
@@ -582,6 +585,19 @@ module LegantoSync1
       end
       return CITATION_TYPES[result] unless CITATION_TYPES[result].nil? || CITATION_TYPES[result].empty?
       CITATION_TYPES["UNKNOWNTYPE"]
+    end
+
+    def list_code(list, course_code)
+      # The Aspire list URI is unique per list and should always be present,
+      # but if it's not present, substitute the MD5 hash of the list name
+      list_uri = File.basename(list.uri)
+      if list_uri.nil? || list_uri.empty?
+        md5 = Digest::MD5.new
+        md5.update list.name
+        list_uri = md5.hexdigest
+      end
+      # Return the list URI as the unique reading list code
+      list_uri
     end
 
     def list_owner_username(list)
