@@ -328,6 +328,9 @@ module LegantoSync1
         "THESIS" => "TH"
     }
 
+    # The value for empty fields
+    EMPTY_FIELD = ' '
+
     # Field length limits
     MAX_CITATION_SOURCE = 4000
     MAX_READING_LIST_CODE = 50
@@ -346,8 +349,8 @@ module LegantoSync1
       self.logger = logger
     end
 
-    def field(value, default = '', size: nil)
-      value ||= default
+    def field(value, default = EMPTY_FIELD, size: nil)
+      value = default if value.nil? || value.empty?
       size ? value[0...size] : value
     end
 
@@ -452,9 +455,9 @@ module LegantoSync1
       # owner_user_name
       row[11] = field(list_owner_username(list))
       # section_name
-      row[12] = field(section_name, MAX_SECTION_NAME)
+      row[12] = field(section_name, size: MAX_SECTION_NAME)
       # section_description
-      row[13] = field(section_description, MAX_SECTION_DESCRIPTION)
+      row[13] = field(section_description, size: MAX_SECTION_DESCRIPTION)
       # section_start_date
       row[14] = field(section_start_date)
       # section_end_date
